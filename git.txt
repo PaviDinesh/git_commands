@@ -1,0 +1,7 @@
+***********************git_commands************	
+
+#28/04/17
+
+1. To show all branch
+
+<cmd> git branch </cmd>
