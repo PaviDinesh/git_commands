@@ -5,3 +5,195 @@
 1. To show all branch
 
 <cmd> git branch </cmd>
+
+
+pipeline {
+    agent any
+    stages {
+        stage('SCM checkout') {
+            steps {
+                script {
+                    git credentialsId: 'git-token', url: 'https://github.com/PaviDinesh/devops.git'
+                }
+            }
+        }
+        stage('Build') {
+            steps {
+                script {
+                    sh 'npm install'
+                }
+            }
+        }
+        stage('Docker Build Images') {
+            steps {
+                script {
+                    sh 'docker build -t pavimd24/helm:v1 .'
+                    sh 'docker images'
+                }
+            }
+        }
+        stage('Docker Push') {
+            steps {
+                script {
+                    withCredentials([string(credentialsId: 'dockerPass', variable: 'dockerPassword')]) {
+                        sh "docker login -u pavimd24 -p ${dockerPassword}"
+                        sh 'docker push pavimd24/helm:v1'
+                    }
+                }
+            }
+        }
+        stage('Deploy on k8s') {
+            steps {
+                script {
+                    withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-cred', accessKeyVariable: 'AWS_ACCESS_KEY_ID', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']]) {
+     echo 'Inside withAWS block'
+                  withKubeCredentials(
+                        kubectlCredentials: [[credentialsId: 'kubernetes']]
+                    ) {
+                        
+                       
+                        sh 'kubectl get nodes'
+                        sh 'kubectl create secret generic helm --from-file=.dockerconfigjson=/opt/docker/config.json  --type kubernetes.io/dockerconfigjson --dry-run=client -oyaml > secret.yaml'
+                        sh 'kubectl apply -f secret.yaml'
+                        sh 'helm package ./Helm'
+                        sh 'helm install myrocket ./myrocketapp-0.2.0.tgz'
+                        sh 'helm ls'
+                        sh 'kubectl get pods -o wide'
+                        sh 'kubectl get svc'
+
+                    }
+                    }
+  
+                }
+            }
+        }
+    }
+}
+=========================================================================
+*DevOps Project Notes*
+
+EC2-1 (t2.medium)
+
+1. Install Jenkins, GIT, Maven & Docker
+  -> amazon-linux-extras install epel (extra packages for enterprise linux)
+  -> yum update -y
+  -> wget -O /etc/yum.repos.d/jenkins.repo https://pkg.jenkins.io/redhat-stable/jenkins.repo
+  -> rpm --import https://pkg.jenkins.io/redhat-stable/jenkins.io-2023.key
+  -> amazon-linux-extras install java-openjdk11		
+  -> yum install jenkins
+  -> yum install git
+  -> yum install docker
+  -> Install maven on /opt by using below link
+       https://mirrors.estointernet.in/apache/maven/maven-3/3.8.5/binaries/apache-maven-3.8.5-bin.tar.gz
+
+EC2-2 (t2.medium)
+
+2. SonarQube
+   -> amazon-linux-extras install epel
+   -> amazon-linux-extras install java-openjdk11
+   -> yum install mysql -y
+   -> https://binaries.sonarsource.com/Distribution/sonarqube/sonarqube-6.7.6.zip
+   -> sudo update-alternatives --config java
+   -> /usr/lib/jvm/java-1.8.0-openjdk-1.8.0.372.b07-1.amzn2.0.1.x86_64/jre/bin/java
+   -> edit wrapper.conf & sonar.properties
+
+
+EC2-3 (t2.medium)
+3. Nexus
+   -> yum install java-1.8.0 -y
+   -> wget https://download.sonatype.com/nexus/3/nexus-3.43.0-01-unix.tar.gz
+   -> create docker private repo with port
+   -> login to docker machine and edit daemon.json file
+   
+
+Overall Stages:
+
+1. Stage1 SCM Check-Out
+2. Stage2 Maven-Build
+3. Stage3 SonarQube Analysis
+4. Stage4 Build Docker Image
+5. Stage5 Push Docker Image to DockerHub
+6. Remove Old Container bfr deploying in to VM
+7. Stage6 Store Docker images in Nexus Private Registery
+8. Stage7 Deploy the docker image on VM
+===================================================================================
+
+Pipeline Stages:
+
+node{
+     stage('SCM Checkout'){
+        git 'https://github.com/pavangit-lab/my-app'
+   }
+   stage('Maven-build'){
+      def mvnHome =  tool name: 'maven3', type: 'maven'   
+      sh "${mvnHome}/bin/mvn package"
+	  sh 'mv target/myweb*.war target/newapp.war'
+   }
+}
+   stage('Build Docker Image'){
+   sh 'docker build -t dockerhub1010/myweb:0.0.2 .'
+   }
+   stage('Docker Image Push'){
+   withCredentials([string(credentialsId: 'dockerPass', variable:'dockerPassword')]) {
+   sh "docker login -u dockerhub1010 -p ${dockerPassword}"
+    }
+   sh 'docker push dockerhub1010/myweb:0.0.2'
+   }
+   stage('Docker deployment'){
+   sh 'docker run -d -p 8090:8080 --name tomcattest dockerhub1010/myweb:0.0.2' 
+   }
+   stage('Remove Previous Container'){
+	try{
+            sh 'docker rm -f tomcattest'
+	}catch(error){
+		//  do nothing if there is an exception
+	}
+   stage('SonarQube Analysis') {
+	        def mvnHome =  tool name: 'maven3', type: 'maven'
+	        withSonarQubeEnv('sonar') { 
+	          sh "${mvnHome}/bin/mvn sonar:sonar"
+	        }
+	    }
+   stage('Nexus Image Push'){
+   sh "docker login -u admin -p admin123 3.87.72.174:8083"
+   sh "docker tag dockerhub1010/myweb:0.0.2 3.87.72.174:8083/greens:1.0.0"
+   sh 'docker push 3.87.72.174:8083/greens:1.0.0'
+   }
+
+
+
+
+
+
+==============================================================
+
+*DB Commands:*
+
+CREATE DATABASE sonar CHARACTER SET utf8 COLLATE utf8_general_ci;
+
+CREATE USER sonar@localhost IDENTIFIED BY 'sonar';
+
+CREATE USER sonar@'%' IDENTIFIED BY 'sonar';
+
+GRANT ALL ON sonar.* TO sonar@localhost;
+
+GRANT ALL ON sonar.* TO sonar@'%';
+
+==============================================================
+edit /etc/docker/daemon.json
+
+{
+  "insecure-registries": [
+    "3.87.72.174:8083"
+  ]
+
+}
+
+sonar-token:
+d160ae92167cb9563f4884ed179893c3fdea83f6
+
+
+
+
+
+
